@@ -1,0 +1,38 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#20715B"
+        android:pathData="M0,0h108v108h-108z" />
+    <path
+        android:fillColor="#2C8B6C"
+        android:fillAlpha="0.42"
+        android:pathData="M108,30v78h-78z" />
+    <path
+        android:fillColor="#F0BC4E"
+        android:pathData="M36,25 H72 C75.31,25 78,27.69 78,31 V57 H30 V31 C30,27.69 32.69,25 36,25 Z" />
+    <path
+        android:fillColor="#FAF6E7"
+        android:pathData="M28,36 H80 C84.97,36 89,40.03 89,45 V76 C89,80.97 84.97,85 80,85 H28 C23.03,85 19,80.97 19,76 V45 C19,40.03 23.03,36 28,36 Z" />
+    <path
+        android:fillColor="#DBEEDE"
+        android:pathData="M59,48 H87 C91.42,48 95,51.58 95,56 V69 C95,73.42 91.42,77 87,77 H59 Z" />
+    <path
+        android:fillColor="#F0BC4E"
+        android:pathData="M76,49 C84.28,49 91,55.72 91,64 C91,72.28 84.28,79 76,79 C67.72,79 61,72.28 61,64 C61,55.72 67.72,49 76,49 Z" />
+    <path
+        android:fillColor="#FFD871"
+        android:pathData="M76,55 C80.97,55 85,59.03 85,64 C85,68.97 80.97,73 76,73 C71.03,73 67,68.97 67,64 C67,59.03 71.03,55 76,55 Z" />
+    <path
+        android:strokeColor="#18332B"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="@android:color/transparent"
+        android:pathData="M34,63 L44,56 L54,61 L67,49" />
+    <path
+        android:fillColor="#ACDBBE"
+        android:pathData="M34,60 C35.99,60 37.6,61.61 37.6,63 C37.6,64.99 35.99,66.6 34,66.6 C32.01,66.6 30.4,64.99 30.4,63 C30.4,61.61 32.01,60 34,60 Z M44,53 C45.99,53 47.6,54.61 47.6,56 C47.6,57.99 45.99,59.6 44,59.6 C42.01,59.6 40.4,57.99 40.4,56 C40.4,54.61 42.01,53 44,53 Z M54,58 C55.99,58 57.6,59.61 57.6,61 C57.6,62.99 55.99,64.6 54,64.6 C52.01,64.6 50.4,62.99 50.4,61 C50.4,59.61 52.01,58 54,58 Z M67,46 C68.99,46 70.6,47.61 70.6,49 C70.6,50.99 68.99,52.6 67,52.6 C65.01,52.6 63.4,50.99 63.4,49 C63.4,47.61 65.01,46 67,46 Z" />
+</vector>
