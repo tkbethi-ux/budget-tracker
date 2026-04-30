@@ -124,7 +124,7 @@ xcodebuild -list -workspace BudgetTracker.xcworkspace
 
 - Register the bundle ID `com.tharunteja.budgettracker` in Apple Developer, or update `PRODUCT_BUNDLE_IDENTIFIER` in Xcode to the exact bundle ID you register.
 - Set your Apple Developer Team in Xcode under the `BudgetTracker` target signing settings.
-- Confirm version `1.0` and build `3` before the next iOS archive.
+- Confirm version `1.1` and build `1` before the next iOS archive.
 - Archive from Xcode with `Product > Archive`, then upload the archive to App Store Connect.
 - Add a public Privacy Policy URL in App Store Connect. Apple requires a Privacy Policy URL for all apps.
 - For App Privacy, this app currently stores budget data locally on-device and does not transmit it to a server. Keep the privacy answers aligned with any future analytics, cloud sync, crash reporting, or account features you add.
