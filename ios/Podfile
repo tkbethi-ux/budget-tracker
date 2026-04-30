@@ -30,5 +30,18 @@ target 'BudgetTracker' do
       :mac_catalyst_enabled => false,
       # :ccache_enabled => true
     )
+
+    hermes_cli_path = File.expand_path('../node_modules/hermes-compiler/hermesc/osx-bin/hermesc', __dir__)
+    installer.aggregate_targets.each do |aggregate_target|
+      aggregate_target.xcconfigs.each do |_config_name, xcconfig|
+        xcconfig.attributes['HERMES_CLI_PATH'] = hermes_cli_path
+      end
+    end
+
+    Dir.glob(File.join(__dir__, 'Pods/Target Support Files/Pods-BudgetTracker/Pods-BudgetTracker.*.xcconfig')).each do |xcconfig_path|
+      contents = File.read(xcconfig_path)
+      contents = contents.gsub(%r{^HERMES_CLI_PATH = .*$}, "HERMES_CLI_PATH = #{hermes_cli_path}")
+      File.write(xcconfig_path, contents)
+    end
   end
 end

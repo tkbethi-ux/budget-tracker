@@ -1,7 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, {useEffect, useMemo, useState} from 'react';
 import {
+  Alert,
   Image,
+  Linking,
+  Modal,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -17,6 +20,8 @@ import {
 } from 'react-native-safe-area-context';
 
 type BudgetMode = 'biweekly' | 'monthly';
+type CurrencyCode = 'USD' | 'INR';
+type DateField = 'start' | 'end';
 type StoreCategory =
   | 'Groceries'
   | 'Household'
@@ -49,6 +54,17 @@ type GroceryItem = {
   checked: boolean;
 };
 
+type Transaction = {
+  id: number;
+  storeId: number;
+  storeName: string;
+  category: StoreCategory;
+  amount: number;
+  visits: number;
+  date: string;
+  note: string;
+};
+
 type Totals = {
   spent: number;
   visits: number;
@@ -63,11 +79,17 @@ type Totals = {
 
 type PersistedBudgetState = {
   budgetMode: BudgetMode;
+  currency: CurrencyCode;
   biweeklyBudget: string;
   monthlyBudget: string;
+  biweeklyStartDate: string;
+  biweeklyEndDate: string;
+  monthlyStartDate: string;
+  monthlyEndDate: string;
   savingsGoal: string;
   stores: Store[];
   groceryItems: GroceryItem[];
+  transactions: Transaction[];
 };
 
 const STORAGE_KEY = '@budget_tracker_state_v2';
@@ -81,22 +103,76 @@ const categories: StoreCategory[] = [
   'Other',
 ];
 
+const currencyOptions: {code: CurrencyCode; label: string}[] = [
+  {code: 'USD', label: 'USD $'},
+  {code: 'INR', label: 'INR ₹'},
+];
+
+const monthNames = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
+function toIsoDate(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+
+  return `${year}-${month}-${day}`;
+}
+
+function addDays(date: Date, days: number) {
+  const nextDate = new Date(date);
+  nextDate.setDate(nextDate.getDate() + days);
+
+  return nextDate;
+}
+
+function getMonthRange(monthOffset = 0) {
+  const today = new Date();
+  const firstDay = new Date(today.getFullYear(), today.getMonth() + monthOffset, 1);
+  const lastDay = new Date(today.getFullYear(), today.getMonth() + monthOffset + 1, 0);
+
+  return {
+    start: toIsoDate(firstDay),
+    end: toIsoDate(lastDay),
+    label: `${monthNames[firstDay.getMonth()]} ${firstDay.getFullYear()}`,
+  };
+}
+
+const currentMonthRange = getMonthRange();
+const today = new Date();
+
 const initialBudgetState: PersistedBudgetState = {
   budgetMode: 'biweekly',
+  currency: 'USD',
   biweeklyBudget: '',
   monthlyBudget: '',
+  biweeklyStartDate: toIsoDate(today),
+  biweeklyEndDate: toIsoDate(addDays(today, 13)),
+  monthlyStartDate: currentMonthRange.start,
+  monthlyEndDate: currentMonthRange.end,
   savingsGoal: '',
   stores: [],
   groceryItems: [],
+  transactions: [],
 };
 
-const moneyFormatter = new Intl.NumberFormat('en-US', {
-  style: 'currency',
-  currency: 'USD',
-});
-
-function toMoney(value: number) {
-  return moneyFormatter.format(Number.isFinite(value) ? value : 0);
+function toMoney(value: number, currency: CurrencyCode) {
+  return new Intl.NumberFormat(currency === 'INR' ? 'en-IN' : 'en-US', {
+    style: 'currency',
+    currency,
+  }).format(Number.isFinite(value) ? value : 0);
 }
 
 function toNumber(value: string) {
@@ -107,12 +183,18 @@ function toNumber(value: string) {
 function normalizeSavedState(
   savedState: Partial<PersistedBudgetState>,
 ): PersistedBudgetState {
+  const currency =
+    savedState.currency === 'INR' || savedState.currency === 'USD'
+      ? savedState.currency
+      : initialBudgetState.currency;
+
   return {
     budgetMode:
       savedState.budgetMode === 'monthly' ||
       savedState.budgetMode === 'biweekly'
         ? savedState.budgetMode
         : initialBudgetState.budgetMode,
+    currency,
     biweeklyBudget:
       typeof savedState.biweeklyBudget === 'string'
         ? savedState.biweeklyBudget
@@ -121,6 +203,22 @@ function normalizeSavedState(
       typeof savedState.monthlyBudget === 'string'
         ? savedState.monthlyBudget
         : initialBudgetState.monthlyBudget,
+    biweeklyStartDate:
+      typeof savedState.biweeklyStartDate === 'string'
+        ? savedState.biweeklyStartDate
+        : initialBudgetState.biweeklyStartDate,
+    biweeklyEndDate:
+      typeof savedState.biweeklyEndDate === 'string'
+        ? savedState.biweeklyEndDate
+        : initialBudgetState.biweeklyEndDate,
+    monthlyStartDate:
+      typeof savedState.monthlyStartDate === 'string'
+        ? savedState.monthlyStartDate
+        : initialBudgetState.monthlyStartDate,
+    monthlyEndDate:
+      typeof savedState.monthlyEndDate === 'string'
+        ? savedState.monthlyEndDate
+        : initialBudgetState.monthlyEndDate,
     savingsGoal:
       typeof savedState.savingsGoal === 'string'
         ? savedState.savingsGoal
@@ -131,6 +229,61 @@ function normalizeSavedState(
     groceryItems: Array.isArray(savedState.groceryItems)
       ? savedState.groceryItems
       : initialBudgetState.groceryItems,
+    transactions: Array.isArray(savedState.transactions)
+      ? savedState.transactions
+      : initialBudgetState.transactions,
+  };
+}
+
+function isDateInRange(date: string, startDate: string, endDate: string) {
+  return date >= startDate && date <= endDate;
+}
+
+function formatDateLabel(date: string) {
+  const [year, month, day] = date.split('-').map(Number);
+  const parsedDate = new Date(year, month - 1, day);
+
+  return parsedDate.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
+function getReportForRange(
+  transactions: Transaction[],
+  startDate: string,
+  endDate: string,
+) {
+  const reportTransactions = transactions.filter(transaction =>
+    isDateInRange(transaction.date, startDate, endDate),
+  );
+  const spent = reportTransactions.reduce(
+    (sum, transaction) => sum + transaction.amount,
+    0,
+  );
+  const visits = reportTransactions.reduce(
+    (sum, transaction) => sum + transaction.visits,
+    0,
+  );
+  const storeTotals = reportTransactions.reduce<Record<string, number>>(
+    (result, transaction) => ({
+      ...result,
+      [transaction.storeName]:
+        (result[transaction.storeName] ?? 0) + transaction.amount,
+    }),
+    {},
+  );
+  const topStore = Object.entries(storeTotals).sort(
+    ([, firstAmount], [, secondAmount]) => secondAmount - firstAmount,
+  )[0];
+
+  return {
+    spent,
+    visits,
+    averageVisit: visits > 0 ? spent / visits : spent,
+    topStoreName: topStore?.[0] ?? 'None',
+    transactionCount: reportTransactions.length,
   };
 }
 
@@ -151,11 +304,26 @@ function BudgetTrackerApp() {
   const [budgetMode, setBudgetMode] = useState<BudgetMode>(
     initialBudgetState.budgetMode,
   );
+  const [currency, setCurrency] = useState<CurrencyCode>(
+    initialBudgetState.currency,
+  );
   const [biweeklyBudget, setBiweeklyBudget] = useState(
     initialBudgetState.biweeklyBudget,
   );
   const [monthlyBudget, setMonthlyBudget] = useState(
     initialBudgetState.monthlyBudget,
+  );
+  const [biweeklyStartDate, setBiweeklyStartDate] = useState(
+    initialBudgetState.biweeklyStartDate,
+  );
+  const [biweeklyEndDate, setBiweeklyEndDate] = useState(
+    initialBudgetState.biweeklyEndDate,
+  );
+  const [monthlyStartDate, setMonthlyStartDate] = useState(
+    initialBudgetState.monthlyStartDate,
+  );
+  const [monthlyEndDate, setMonthlyEndDate] = useState(
+    initialBudgetState.monthlyEndDate,
   );
   const [savingsGoal, setSavingsGoal] = useState(
     initialBudgetState.savingsGoal,
@@ -163,6 +331,14 @@ function BudgetTrackerApp() {
   const [stores, setStores] = useState<Store[]>(initialBudgetState.stores);
   const [groceryItems, setGroceryItems] =
     useState<GroceryItem[]>(initialBudgetState.groceryItems);
+  const [transactions, setTransactions] = useState<Transaction[]>(
+    initialBudgetState.transactions,
+  );
+  const [datePicker, setDatePicker] = useState<{
+    mode: BudgetMode;
+    field: DateField;
+  } | null>(null);
+  const [calendarMonth, setCalendarMonth] = useState(new Date());
   const [hasLoadedSavedState, setHasLoadedSavedState] = useState(false);
   const [storageError, setStorageError] = useState('');
   const [storeForm, setStoreForm] = useState<StoreForm>({
@@ -195,11 +371,17 @@ function BudgetTrackerApp() {
           const normalizedState = normalizeSavedState(JSON.parse(savedState));
 
           setBudgetMode(normalizedState.budgetMode);
+          setCurrency(normalizedState.currency);
           setBiweeklyBudget(normalizedState.biweeklyBudget);
           setMonthlyBudget(normalizedState.monthlyBudget);
+          setBiweeklyStartDate(normalizedState.biweeklyStartDate);
+          setBiweeklyEndDate(normalizedState.biweeklyEndDate);
+          setMonthlyStartDate(normalizedState.monthlyStartDate);
+          setMonthlyEndDate(normalizedState.monthlyEndDate);
           setSavingsGoal(normalizedState.savingsGoal);
           setStores(normalizedState.stores);
           setGroceryItems(normalizedState.groceryItems);
+          setTransactions(normalizedState.transactions);
         }
 
         setStorageError('');
@@ -228,11 +410,17 @@ function BudgetTrackerApp() {
 
     const nextState: PersistedBudgetState = {
       budgetMode,
+      currency,
       biweeklyBudget,
       monthlyBudget,
+      biweeklyStartDate,
+      biweeklyEndDate,
+      monthlyStartDate,
+      monthlyEndDate,
       savingsGoal,
       stores,
       groceryItems,
+      transactions,
     };
 
     AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(nextState))
@@ -242,17 +430,56 @@ function BudgetTrackerApp() {
       });
   }, [
     biweeklyBudget,
+    biweeklyEndDate,
+    biweeklyStartDate,
     budgetMode,
+    currency,
     groceryItems,
     hasLoadedSavedState,
+    monthlyEndDate,
     monthlyBudget,
+    monthlyStartDate,
     savingsGoal,
     stores,
+    transactions,
   ]);
 
+  const activePeriod = useMemo(
+    () =>
+      budgetMode === 'biweekly'
+        ? {startDate: biweeklyStartDate, endDate: biweeklyEndDate}
+        : {startDate: monthlyStartDate, endDate: monthlyEndDate},
+    [
+      biweeklyEndDate,
+      biweeklyStartDate,
+      budgetMode,
+      monthlyEndDate,
+      monthlyStartDate,
+    ],
+  );
+
   const totals = useMemo(() => {
-    const spent = stores.reduce((sum, store) => sum + store.amount, 0);
-    const visits = stores.reduce((sum, store) => sum + store.visits, 0);
+    const periodTransactions = transactions.filter(transaction =>
+      isDateInRange(
+        transaction.date,
+        activePeriod.startDate,
+        activePeriod.endDate,
+      ),
+    );
+    const spent =
+      transactions.length > 0
+        ? periodTransactions.reduce(
+            (sum, transaction) => sum + transaction.amount,
+            0,
+          )
+        : stores.reduce((sum, store) => sum + store.amount, 0);
+    const visits =
+      transactions.length > 0
+        ? periodTransactions.reduce(
+            (sum, transaction) => sum + transaction.visits,
+            0,
+          )
+        : stores.reduce((sum, store) => sum + store.visits, 0);
     const activeBudget =
       budgetMode === 'biweekly'
         ? toNumber(biweeklyBudget)
@@ -280,7 +507,17 @@ function BudgetTrackerApp() {
       savingsTarget,
       savingsReady,
     };
-  }, [biweeklyBudget, budgetMode, groceryItems, monthlyBudget, savingsGoal, stores]);
+  }, [
+    activePeriod.endDate,
+    activePeriod.startDate,
+    biweeklyBudget,
+    budgetMode,
+    groceryItems,
+    monthlyBudget,
+    savingsGoal,
+    stores,
+    transactions,
+  ]);
 
   const sortedStores = useMemo(
     () =>
@@ -297,15 +534,128 @@ function BudgetTrackerApp() {
     () =>
       categories.map(category => ({
         category,
-        amount: stores
-          .filter(store => store.category === category)
-          .reduce((sum, store) => sum + store.amount, 0),
-        visits: stores
-          .filter(store => store.category === category)
-          .reduce((sum, store) => sum + store.visits, 0),
+        amount:
+          transactions.length > 0
+            ? transactions
+                .filter(
+                  transaction =>
+                    transaction.category === category &&
+                    isDateInRange(
+                      transaction.date,
+                      activePeriod.startDate,
+                      activePeriod.endDate,
+                    ),
+                )
+                .reduce((sum, transaction) => sum + transaction.amount, 0)
+            : stores
+                .filter(store => store.category === category)
+                .reduce((sum, store) => sum + store.amount, 0),
+        visits:
+          transactions.length > 0
+            ? transactions
+                .filter(
+                  transaction =>
+                    transaction.category === category &&
+                    isDateInRange(
+                      transaction.date,
+                      activePeriod.startDate,
+                      activePeriod.endDate,
+                    ),
+                )
+                .reduce((sum, transaction) => sum + transaction.visits, 0)
+            : stores
+                .filter(store => store.category === category)
+                .reduce((sum, store) => sum + store.visits, 0),
       })),
-    [stores],
+    [
+      activePeriod.endDate,
+      activePeriod.startDate,
+      stores,
+      transactions,
+    ],
   );
+
+  const previousMonthRange = useMemo(() => getMonthRange(-1), []);
+  const previousMonthReport = useMemo(
+    () =>
+      getReportForRange(
+        transactions,
+        previousMonthRange.start,
+        previousMonthRange.end,
+      ),
+    [previousMonthRange.end, previousMonthRange.start, transactions],
+  );
+
+  function getActivePeriodDate(mode: BudgetMode, field: DateField) {
+    if (mode === 'biweekly') {
+      return field === 'start' ? biweeklyStartDate : biweeklyEndDate;
+    }
+
+    return field === 'start' ? monthlyStartDate : monthlyEndDate;
+  }
+
+  function setActivePeriodDate(
+    mode: BudgetMode,
+    field: DateField,
+    date: string,
+  ) {
+    const currentStart =
+      mode === 'biweekly' ? biweeklyStartDate : monthlyStartDate;
+    const currentEnd = mode === 'biweekly' ? biweeklyEndDate : monthlyEndDate;
+    const nextStart = field === 'start' ? date : currentStart;
+    const nextEnd = field === 'end' ? date : currentEnd;
+
+    if (mode === 'biweekly') {
+      setBiweeklyStartDate(nextStart);
+      setBiweeklyEndDate(nextEnd < nextStart ? nextStart : nextEnd);
+      return;
+    }
+
+    setMonthlyStartDate(nextStart);
+    setMonthlyEndDate(nextEnd < nextStart ? nextStart : nextEnd);
+  }
+
+  function openDatePicker(mode: BudgetMode, field: DateField) {
+    const selectedDate = getActivePeriodDate(mode, field);
+    const [year, month, day] = selectedDate.split('-').map(Number);
+
+    setCalendarMonth(new Date(year, month - 1, day));
+    setDatePicker({mode, field});
+  }
+
+  function addTransaction(transaction: Omit<Transaction, 'id' | 'date'>) {
+    setTransactions(currentTransactions => [
+      {
+        ...transaction,
+        id: Date.now() + Math.round(Math.random() * 1000),
+        date: toIsoDate(new Date()),
+      },
+      ...currentTransactions,
+    ]);
+  }
+
+  function emailPreviousMonthReport() {
+    const subject = `Budget Tracker report - ${previousMonthRange.label}`;
+    const body = [
+      `Budget Tracker report for ${previousMonthRange.label}`,
+      '',
+      `Spent: ${toMoney(previousMonthReport.spent, currency)}`,
+      `Visits: ${previousMonthReport.visits}`,
+      `Average per visit: ${toMoney(previousMonthReport.averageVisit, currency)}`,
+      `Most expensive store: ${previousMonthReport.topStoreName}`,
+      `Transactions: ${previousMonthReport.transactionCount}`,
+    ].join('\n');
+    const mailUrl = `mailto:?subject=${encodeURIComponent(
+      subject,
+    )}&body=${encodeURIComponent(body)}`;
+
+    Linking.openURL(mailUrl).catch(() => {
+      Alert.alert(
+        'Email is not available',
+        'Please set up Mail on this device, then try sending the report again.',
+      );
+    });
+  }
 
   function resetStoreForm() {
     setStoreForm({
@@ -336,17 +686,41 @@ function BudgetTrackerApp() {
       mine: storeForm.mine,
     };
 
-    setStores(currentStores => {
-      const exists = currentStores.some(store => store.id === nextStore.id);
+    const existingStore = stores.find(store => store.id === nextStore.id);
 
-      if (exists) {
-        return currentStores.map(store =>
-          store.id === nextStore.id ? nextStore : store,
-        );
+    if (existingStore) {
+      const amountDelta = nextStore.amount - existingStore.amount;
+      const visitDelta = nextStore.visits - existingStore.visits;
+
+      if (amountDelta !== 0 || visitDelta !== 0) {
+        addTransaction({
+          storeId: nextStore.id,
+          storeName: nextStore.name,
+          category: nextStore.category,
+          amount: amountDelta,
+          visits: visitDelta,
+          note: 'Store updated',
+        });
       }
 
-      return [nextStore, ...currentStores];
-    });
+      setStores(currentStores =>
+        currentStores.map(store =>
+          store.id === nextStore.id ? nextStore : store,
+        ),
+      );
+    } else {
+      addTransaction({
+        storeId: nextStore.id,
+        storeName: nextStore.name,
+        category: nextStore.category,
+        amount: nextStore.amount,
+        visits: nextStore.visits,
+        note: 'Store added',
+      });
+
+      setStores(currentStores => [nextStore, ...currentStores]);
+    }
+
     resetStoreForm();
   }
 
@@ -364,6 +738,21 @@ function BudgetTrackerApp() {
   }
 
   function incrementVisit(storeId: number) {
+    const selectedStore = stores.find(store => store.id === storeId);
+
+    if (!selectedStore) {
+      return;
+    }
+
+    addTransaction({
+      storeId: selectedStore.id,
+      storeName: selectedStore.name,
+      category: selectedStore.category,
+      amount: 0,
+      visits: 1,
+      note: 'Visit added',
+    });
+
     setStores(currentStores =>
       currentStores.map(store =>
         store.id === storeId
@@ -377,6 +766,21 @@ function BudgetTrackerApp() {
   }
 
   function addQuickAmount(storeId: number, amount: number) {
+    const selectedStore = stores.find(store => store.id === storeId);
+
+    if (!selectedStore) {
+      return;
+    }
+
+    addTransaction({
+      storeId: selectedStore.id,
+      storeName: selectedStore.name,
+      category: selectedStore.category,
+      amount,
+      visits: 0,
+      note: 'Quick amount added',
+    });
+
     setStores(currentStores =>
       currentStores.map(store =>
         store.id === storeId
@@ -497,7 +901,11 @@ function BudgetTrackerApp() {
           {paddingBottom: 132 + insets.bottom},
         ]}
         showsVerticalScrollIndicator={false}>
-        <OverviewCards totals={totals} budgetMode={budgetMode} />
+        <OverviewCards
+          totals={totals}
+          budgetMode={budgetMode}
+          currency={currency}
+        />
         {storageError ? (
           <View style={styles.warningBanner}>
             <Text style={styles.warningText}>{storageError}</Text>
@@ -515,6 +923,7 @@ function BudgetTrackerApp() {
             incrementVisit={incrementVisit}
             addQuickAmount={addQuickAmount}
             toggleStoreFlag={toggleStoreFlag}
+            currency={currency}
           />
         ) : null}
 
@@ -522,12 +931,19 @@ function BudgetTrackerApp() {
           <BudgetTab
             budgetMode={budgetMode}
             setBudgetMode={setBudgetMode}
+            currency={currency}
+            setCurrency={setCurrency}
             biweeklyBudget={biweeklyBudget}
             monthlyBudget={monthlyBudget}
+            biweeklyStartDate={biweeklyStartDate}
+            biweeklyEndDate={biweeklyEndDate}
+            monthlyStartDate={monthlyStartDate}
+            monthlyEndDate={monthlyEndDate}
             savingsGoal={savingsGoal}
             setBiweeklyBudget={setBiweeklyBudget}
             setMonthlyBudget={setMonthlyBudget}
             setSavingsGoal={setSavingsGoal}
+            openDatePicker={openDatePicker}
             totals={totals}
           />
         ) : null}
@@ -542,6 +958,7 @@ function BudgetTrackerApp() {
             removeGroceryItem={removeGroceryItem}
             groceryPlanned={totals.groceryPlanned}
             groceryRemaining={totals.groceryRemaining}
+            currency={currency}
           />
         ) : null}
 
@@ -550,13 +967,40 @@ function BudgetTrackerApp() {
             totals={totals}
             categoryTotals={categoryTotals}
             stores={stores}
+            transactions={transactions}
             biweeklyBudget={toNumber(biweeklyBudget)}
             monthlyBudget={toNumber(monthlyBudget)}
+            previousMonthLabel={previousMonthRange.label}
+            previousMonthReport={previousMonthReport}
+            emailPreviousMonthReport={emailPreviousMonthReport}
+            currency={currency}
           />
         ) : null}
       </ScrollView>
 
-      <BottomSummary totals={totals} budgetMode={budgetMode} />
+      <CalendarModal
+        visible={datePicker !== null}
+        calendarMonth={calendarMonth}
+        selectedDate={
+          datePicker
+            ? getActivePeriodDate(datePicker.mode, datePicker.field)
+            : toIsoDate(new Date())
+        }
+        setCalendarMonth={setCalendarMonth}
+        onClose={() => setDatePicker(null)}
+        onSelect={date => {
+          if (datePicker) {
+            setActivePeriodDate(datePicker.mode, datePicker.field, date);
+          }
+          setDatePicker(null);
+        }}
+      />
+
+      <BottomSummary
+        totals={totals}
+        budgetMode={budgetMode}
+        currency={currency}
+      />
     </View>
   );
 }
@@ -564,9 +1008,11 @@ function BudgetTrackerApp() {
 function OverviewCards({
   totals,
   budgetMode,
+  currency,
 }: {
   totals: Totals;
   budgetMode: BudgetMode;
+  currency: CurrencyCode;
 }) {
   const percentSpent =
     totals.activeBudget > 0
@@ -578,7 +1024,7 @@ function OverviewCards({
     <View style={styles.overviewGrid}>
       <View style={styles.primaryCard}>
         <Text style={styles.cardLabel}>Total spent</Text>
-        <Text style={styles.totalText}>{toMoney(totals.spent)}</Text>
+        <Text style={styles.totalText}>{toMoney(totals.spent, currency)}</Text>
         <Text style={styles.cardNote}>
           {percentSpent}% of {budgetMode} budget used
         </Text>
@@ -613,6 +1059,7 @@ function StoresTab({
   incrementVisit,
   addQuickAmount,
   toggleStoreFlag,
+  currency,
 }: {
   storeForm: StoreForm;
   setStoreForm: React.Dispatch<React.SetStateAction<StoreForm>>;
@@ -623,6 +1070,7 @@ function StoresTab({
   incrementVisit: (storeId: number) => void;
   addQuickAmount: (storeId: number, amount: number) => void;
   toggleStoreFlag: (storeId: number, flag: 'favorite' | 'mine') => void;
+  currency: CurrencyCode;
 }) {
   return (
     <>
@@ -711,6 +1159,7 @@ function StoresTab({
             onQuickAdd={amount => addQuickAmount(store.id, amount)}
             onToggleFavorite={() => toggleStoreFlag(store.id, 'favorite')}
             onToggleMine={() => toggleStoreFlag(store.id, 'mine')}
+            currency={currency}
           />
         ))}
       </Section>
@@ -721,24 +1170,43 @@ function StoresTab({
 function BudgetTab({
   budgetMode,
   setBudgetMode,
+  currency,
+  setCurrency,
   biweeklyBudget,
   monthlyBudget,
+  biweeklyStartDate,
+  biweeklyEndDate,
+  monthlyStartDate,
+  monthlyEndDate,
   savingsGoal,
   setBiweeklyBudget,
   setMonthlyBudget,
   setSavingsGoal,
+  openDatePicker,
   totals,
 }: {
   budgetMode: BudgetMode;
   setBudgetMode: (mode: BudgetMode) => void;
+  currency: CurrencyCode;
+  setCurrency: (currency: CurrencyCode) => void;
   biweeklyBudget: string;
   monthlyBudget: string;
+  biweeklyStartDate: string;
+  biweeklyEndDate: string;
+  monthlyStartDate: string;
+  monthlyEndDate: string;
   savingsGoal: string;
   setBiweeklyBudget: (value: string) => void;
   setMonthlyBudget: (value: string) => void;
   setSavingsGoal: (value: string) => void;
+  openDatePicker: (mode: BudgetMode, field: DateField) => void;
   totals: Totals;
 }) {
+  const periodStartDate =
+    budgetMode === 'biweekly' ? biweeklyStartDate : monthlyStartDate;
+  const periodEndDate =
+    budgetMode === 'biweekly' ? biweeklyEndDate : monthlyEndDate;
+
   return (
     <>
       <Section title="Budget setup">
@@ -752,6 +1220,28 @@ function BudgetTab({
             label="Monthly budget"
             selected={budgetMode === 'monthly'}
             onPress={() => setBudgetMode('monthly')}
+          />
+        </View>
+        <View style={styles.choiceWrap}>
+          {currencyOptions.map(option => (
+            <PillButton
+              key={option.code}
+              label={option.label}
+              selected={currency === option.code}
+              onPress={() => setCurrency(option.code)}
+            />
+          ))}
+        </View>
+        <View style={styles.dateRangeRow}>
+          <DateButton
+            label="From"
+            value={formatDateLabel(periodStartDate)}
+            onPress={() => openDatePicker(budgetMode, 'start')}
+          />
+          <DateButton
+            label="To"
+            value={formatDateLabel(periodEndDate)}
+            onPress={() => openDatePicker(budgetMode, 'end')}
           />
         </View>
         <TextInput
@@ -781,21 +1271,21 @@ function BudgetTab({
       </Section>
 
       <Section title="Budget health">
-        <InfoRow label="Active budget" value={toMoney(totals.activeBudget)} />
-        <InfoRow label="Spent so far" value={toMoney(totals.spent)} />
+        <InfoRow label="Active budget" value={toMoney(totals.activeBudget, currency)} />
+        <InfoRow label="Spent so far" value={toMoney(totals.spent, currency)} />
         <InfoRow
           label="Remaining"
-          value={toMoney(totals.remaining)}
+          value={toMoney(totals.remaining, currency)}
           danger={totals.remaining < 0}
         />
         <InfoRow
           label="Remaining after grocery list"
-          value={toMoney(totals.projectedRemaining)}
+          value={toMoney(totals.projectedRemaining, currency)}
           danger={totals.projectedRemaining < 0}
         />
         <InfoRow
           label="Savings goal buffer"
-          value={toMoney(totals.savingsReady)}
+          value={toMoney(totals.savingsReady, currency)}
         />
       </Section>
     </>
@@ -811,6 +1301,7 @@ function GroceryTab({
   removeGroceryItem,
   groceryPlanned,
   groceryRemaining,
+  currency,
 }: {
   groceryForm: {name: string; estimatedCost: string; quantity: string};
   setGroceryForm: React.Dispatch<
@@ -822,6 +1313,7 @@ function GroceryTab({
   removeGroceryItem: (itemId: number) => void;
   groceryPlanned: number;
   groceryRemaining: number;
+  currency: CurrencyCode;
 }) {
   return (
     <>
@@ -861,8 +1353,14 @@ function GroceryTab({
       </Section>
 
       <Section title="Shopping plan">
-        <InfoRow label="Estimated list" value={toMoney(groceryPlanned)} />
-        <InfoRow label="Not bought yet" value={toMoney(groceryRemaining)} />
+        <InfoRow
+          label="Estimated list"
+          value={toMoney(groceryPlanned, currency)}
+        />
+        <InfoRow
+          label="Not bought yet"
+          value={toMoney(groceryRemaining, currency)}
+        />
         {groceryItems.map(item => (
           <View key={item.id} style={styles.groceryRow}>
             <TouchableOpacity
@@ -882,11 +1380,11 @@ function GroceryTab({
                 {item.name}
               </Text>
               <Text style={styles.groceryMeta}>
-                {item.quantity} x {toMoney(item.estimatedCost)}
+                {item.quantity} x {toMoney(item.estimatedCost, currency)}
               </Text>
             </View>
             <Text style={styles.groceryPrice}>
-              {toMoney(item.quantity * item.estimatedCost)}
+              {toMoney(item.quantity * item.estimatedCost, currency)}
             </Text>
             <TouchableOpacity
               style={styles.removeButton}
@@ -904,14 +1402,24 @@ function ReportsTab({
   totals,
   categoryTotals,
   stores,
+  transactions,
   biweeklyBudget,
   monthlyBudget,
+  previousMonthLabel,
+  previousMonthReport,
+  emailPreviousMonthReport,
+  currency,
 }: {
   totals: Totals;
   categoryTotals: {category: StoreCategory; amount: number; visits: number}[];
   stores: Store[];
+  transactions: Transaction[];
   biweeklyBudget: number;
   monthlyBudget: number;
+  previousMonthLabel: string;
+  previousMonthReport: ReturnType<typeof getReportForRange>;
+  emailPreviousMonthReport: () => void;
+  currency: CurrencyCode;
 }) {
   const averageVisit =
     totals.visits > 0 ? totals.spent / totals.visits : totals.spent;
@@ -920,20 +1428,56 @@ function ReportsTab({
   return (
     <>
       <Section title="Reports">
-        <InfoRow label="Bi-weekly spent" value={toMoney(totals.spent)} />
+        <InfoRow
+          label="Bi-weekly spent"
+          value={toMoney(totals.spent, currency)}
+        />
         <InfoRow
           label="Bi-weekly remaining"
-          value={toMoney(biweeklyBudget - totals.spent)}
+          value={toMoney(biweeklyBudget - totals.spent, currency)}
           danger={biweeklyBudget - totals.spent < 0}
         />
-        <InfoRow label="Monthly spent" value={toMoney(totals.spent)} />
+        <InfoRow
+          label="Monthly spent"
+          value={toMoney(totals.spent, currency)}
+        />
         <InfoRow
           label="Monthly remaining"
-          value={toMoney(monthlyBudget - totals.spent)}
+          value={toMoney(monthlyBudget - totals.spent, currency)}
           danger={monthlyBudget - totals.spent < 0}
         />
-        <InfoRow label="Average per visit" value={toMoney(averageVisit)} />
+        <InfoRow
+          label="Average per visit"
+          value={toMoney(averageVisit, currency)}
+        />
         <InfoRow label="Most expensive store" value={topStore?.name ?? 'None'} />
+      </Section>
+
+      <Section title={`Previous month: ${previousMonthLabel}`}>
+        <InfoRow
+          label="Spent"
+          value={toMoney(previousMonthReport.spent, currency)}
+        />
+        <InfoRow label="Visits" value={String(previousMonthReport.visits)} />
+        <InfoRow
+          label="Average per visit"
+          value={toMoney(previousMonthReport.averageVisit, currency)}
+        />
+        <InfoRow
+          label="Most expensive store"
+          value={previousMonthReport.topStoreName}
+        />
+        <TouchableOpacity
+          style={styles.primaryButton}
+          onPress={emailPreviousMonthReport}>
+          <Text style={styles.primaryButtonText}>Email previous month</Text>
+        </TouchableOpacity>
+        {transactions.length === 0 ? (
+          <Text style={styles.noteText}>
+            Previous month reports will fill in after you start adding store
+            updates with this version.
+          </Text>
+        ) : null}
       </Section>
 
       <Section title="Category breakdown">
@@ -942,7 +1486,7 @@ function ReportsTab({
             <View style={styles.reportHeader}>
               <Text style={styles.reportLabel}>{item.category}</Text>
               <Text style={styles.reportValue}>
-                {toMoney(item.amount)} / {item.visits} visits
+                {toMoney(item.amount, currency)} / {item.visits} visits
               </Text>
             </View>
             <View style={styles.reportTrack}>
@@ -986,6 +1530,7 @@ function StoreCard({
   onQuickAdd,
   onToggleFavorite,
   onToggleMine,
+  currency,
 }: {
   store: Store;
   onEdit: () => void;
@@ -993,7 +1538,10 @@ function StoreCard({
   onQuickAdd: (amount: number) => void;
   onToggleFavorite: () => void;
   onToggleMine: () => void;
+  currency: CurrencyCode;
 }) {
+  const quickAmounts = currency === 'INR' ? [100, 500] : [10, 25];
+
   return (
     <View style={styles.storeCard}>
       <View style={styles.storeTopRow}>
@@ -1003,22 +1551,31 @@ function StoreCard({
             {store.category} / {store.visits} visits
           </Text>
         </View>
-        <Text style={styles.storeAmount}>{toMoney(store.amount)}</Text>
+        <Text style={styles.storeAmount}>{toMoney(store.amount, currency)}</Text>
       </View>
 
       <View style={styles.tagRow}>
         {store.favorite ? <Text style={styles.tag}>Starred</Text> : null}
         {store.mine ? <Text style={styles.tag}>My store</Text> : null}
         <Text style={styles.tag}>
-          Avg {toMoney(store.visits > 0 ? store.amount / store.visits : 0)}
+          Avg{' '}
+          {toMoney(
+            store.visits > 0 ? store.amount / store.visits : 0,
+            currency,
+          )}
         </Text>
       </View>
 
       <View style={styles.cardActions}>
         <SmallButton label="Edit" onPress={onEdit} />
         <SmallButton label="+ Visit" onPress={onVisit} />
-        <SmallButton label="+ $10" onPress={() => onQuickAdd(10)} />
-        <SmallButton label="+ $25" onPress={() => onQuickAdd(25)} />
+        {quickAmounts.map(amount => (
+          <SmallButton
+            key={amount}
+            label={`+ ${toMoney(amount, currency)}`}
+            onPress={() => onQuickAdd(amount)}
+          />
+        ))}
       </View>
       <View style={styles.cardActions}>
         <SmallButton
@@ -1037,15 +1594,17 @@ function StoreCard({
 function BottomSummary({
   totals,
   budgetMode,
+  currency,
 }: {
   totals: Totals;
   budgetMode: BudgetMode;
+  currency: CurrencyCode;
 }) {
   return (
     <View style={styles.bottomSummary}>
       <View>
         <Text style={styles.bottomLabel}>Spent</Text>
-        <Text style={styles.bottomValue}>{toMoney(totals.spent)}</Text>
+        <Text style={styles.bottomValue}>{toMoney(totals.spent, currency)}</Text>
       </View>
       <View style={styles.bottomDivider} />
       <View>
@@ -1055,12 +1614,134 @@ function BottomSummary({
         <Text
           style={[
             styles.bottomValue,
-            totals.remaining < 0 ? styles.dangerText : null,
+          totals.remaining < 0 ? styles.dangerText : null,
           ]}>
-          {toMoney(totals.remaining)}
+          {toMoney(totals.remaining, currency)}
         </Text>
       </View>
     </View>
+  );
+}
+
+function DateButton({
+  label,
+  value,
+  onPress,
+}: {
+  label: string;
+  value: string;
+  onPress: () => void;
+}) {
+  return (
+    <TouchableOpacity style={styles.dateButton} onPress={onPress}>
+      <Text style={styles.dateButtonLabel}>{label}</Text>
+      <Text style={styles.dateButtonValue}>{value}</Text>
+    </TouchableOpacity>
+  );
+}
+
+function CalendarModal({
+  visible,
+  calendarMonth,
+  selectedDate,
+  setCalendarMonth,
+  onClose,
+  onSelect,
+}: {
+  visible: boolean;
+  calendarMonth: Date;
+  selectedDate: string;
+  setCalendarMonth: React.Dispatch<React.SetStateAction<Date>>;
+  onClose: () => void;
+  onSelect: (date: string) => void;
+}) {
+  const year = calendarMonth.getFullYear();
+  const month = calendarMonth.getMonth();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const firstWeekday = new Date(year, month, 1).getDay();
+  const calendarCells = [
+    ...Array.from({length: firstWeekday}, (_, index) => ({
+      key: `empty-${index}`,
+      day: 0,
+    })),
+    ...Array.from({length: daysInMonth}, (_, index) => ({
+      key: `day-${index + 1}`,
+      day: index + 1,
+    })),
+  ];
+
+  function moveMonth(direction: number) {
+    setCalendarMonth(currentMonth => {
+      const nextMonth = new Date(currentMonth);
+      nextMonth.setMonth(nextMonth.getMonth() + direction);
+
+      return nextMonth;
+    });
+  }
+
+  return (
+    <Modal visible={visible} transparent animationType="fade">
+      <View style={styles.modalBackdrop}>
+        <View style={styles.calendarPanel}>
+          <View style={styles.calendarHeader}>
+            <TouchableOpacity
+              style={styles.calendarNavButton}
+              onPress={() => moveMonth(-1)}>
+              <Text style={styles.calendarNavText}>Prev</Text>
+            </TouchableOpacity>
+            <Text style={styles.calendarTitle}>
+              {monthNames[month]} {year}
+            </Text>
+            <TouchableOpacity
+              style={styles.calendarNavButton}
+              onPress={() => moveMonth(1)}>
+              <Text style={styles.calendarNavText}>Next</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.weekRow}>
+            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
+              <Text key={day} style={styles.weekdayText}>
+                {day}
+              </Text>
+            ))}
+          </View>
+
+          <View style={styles.calendarGrid}>
+            {calendarCells.map(cell => {
+              const date =
+                cell.day > 0
+                  ? toIsoDate(new Date(year, month, cell.day))
+                  : '';
+              const isSelected = date === selectedDate;
+
+              return (
+                <TouchableOpacity
+                  key={cell.key}
+                  style={[
+                    styles.dayButton,
+                    isSelected ? styles.dayButtonSelected : null,
+                  ]}
+                  disabled={cell.day === 0}
+                  onPress={() => onSelect(date)}>
+                  <Text
+                    style={[
+                      styles.dayButtonText,
+                      isSelected ? styles.dayButtonTextSelected : null,
+                    ]}>
+                    {cell.day > 0 ? cell.day : ''}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <TouchableOpacity style={styles.ghostButton} onPress={onClose}>
+            <Text style={styles.ghostButtonText}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -1335,6 +2016,32 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     gap: 10,
+  },
+  dateRangeRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  dateButton: {
+    flex: 1,
+    minHeight: 54,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#C9D1C8',
+    backgroundColor: '#FEFCF6',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  dateButtonLabel: {
+    color: '#66746C',
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  dateButtonValue: {
+    color: '#17251E',
+    fontSize: 14,
+    fontWeight: '800',
+    marginTop: 3,
   },
   flexInput: {
     flex: 1,
@@ -1649,6 +2356,77 @@ const styles = StyleSheet.create({
     width: 1,
     height: 44,
     backgroundColor: '#3E5D51',
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(23, 37, 30, 0.48)',
+    justifyContent: 'center',
+    padding: 18,
+  },
+  calendarPanel: {
+    borderRadius: 8,
+    backgroundColor: '#F4F1EA',
+    padding: 14,
+    gap: 12,
+  },
+  calendarHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  calendarTitle: {
+    flex: 1,
+    color: '#17251E',
+    fontSize: 18,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  calendarNavButton: {
+    minHeight: 36,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#C9D1C8',
+    backgroundColor: '#FEFCF6',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  calendarNavText: {
+    color: '#1F4D40',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  weekRow: {
+    flexDirection: 'row',
+  },
+  weekdayText: {
+    flex: 1,
+    color: '#66746C',
+    fontSize: 12,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  calendarGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  dayButton: {
+    width: `${100 / 7}%`,
+    aspectRatio: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+  },
+  dayButtonSelected: {
+    backgroundColor: '#1F4D40',
+  },
+  dayButtonText: {
+    color: '#17251E',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  dayButtonTextSelected: {
+    color: '#FFFFFF',
   },
 });
 
